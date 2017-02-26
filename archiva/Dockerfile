@@ -1,40 +1,60 @@
-FROM openjdk:8u111-jre
+FROM openjdk:8-jre
 
 MAINTAINER Trung Nguyen <i@ngthanhtrung.com>
 
 RUN groupadd -r archiva && useradd -r -g archiva archiva
 
-ENV ARCHIVA_VERSION 2.2.1
-ENV ARCHIVA_BIN_URL http://www.apache.org/dist/archiva/$ARCHIVA_VERSION/binaries/apache-archiva-$ARCHIVA_VERSION-bin.tar.gz
-ENV ARCHIVA_BIN_MD5 ff4a83007ac10fe4add308d22dfbc3d6
-ENV ARCHIVA_BASE /var/archiva
+ENV GOSU_VERSION 1.7
 
-RUN curl -sSLo archiva.tar.gz $ARCHIVA_BIN_URL \
-	&& echo "$ARCHIVA_BIN_MD5 archiva.tar.gz" | md5sum -c \
+RUN set -x \
+	&& wget -O /usr/local/bin/gosu "https://github.com/tianon/gosu/releases/download/${GOSU_VERSION}/gosu-$(dpkg --print-architecture)" \
+	&& wget -O /usr/local/bin/gosu.asc "https://github.com/tianon/gosu/releases/download/${GOSU_VERSION}/gosu-$(dpkg --print-architecture).asc" \
+	&& export GNUPGHOME="$(mktemp -d)" \
+	&& gpg --keyserver ha.pool.sks-keyservers.net --recv-keys B42F6819007F00F88E364FD4036A9C25BF357DD4 \
+	&& gpg --batch --verify /usr/local/bin/gosu.asc /usr/local/bin/gosu \
+	&& rm -r "${GNUPGHOME}" /usr/local/bin/gosu.asc \
+	&& chmod +x /usr/local/bin/gosu \
+	&& gosu nobody true
+
+ENV ARCHIVA_VERSION 2.2.1
+
+RUN set -x \
+	&& wget -O archiva.tar.gz "https://www.apache.org/dist/archiva/${ARCHIVA_VERSION}/binaries/apache-archiva-${ARCHIVA_VERSION}-bin.tar.gz" \
+	&& wget -O archiva.tar.gz.asc "https://www.apache.org/dist/archiva/${ARCHIVA_VERSION}/binaries/apache-archiva-${ARCHIVA_VERSION}-bin.tar.gz.asc" \
+	&& wget -O KEYS https://www.apache.org/dist/archiva/KEYS \
+	&& export GNUPGHOME="$(mktemp -d)" \
+	&& gpg --import KEYS \
+	&& gpg --batch --verify archiva.tar.gz.asc archiva.tar.gz \
+	&& rm -r "${GNUPGHOME}" KEYS archiva.tar.gz.asc \
+	\
 	&& tar -xf archiva.tar.gz -C /usr/local \
-	&& mv /usr/local/apache-archiva-$ARCHIVA_VERSION /usr/local/archiva \
+	&& mv "/usr/local/apache-archiva-${ARCHIVA_VERSION}" /usr/local/archiva \
 	&& rm archiva.tar.gz \
 	\
-	&& mkdir -p \
-		$ARCHIVA_BASE/conf \
-		$ARCHIVA_BASE/data \
-		$ARCHIVA_BASE/logs \
-		$ARCHIVA_BASE/temp \
-	\
-	&& cd /usr/local/archiva \
-	&& sed -i "/set.default.ARCHIVA_BASE/c\set.default.ARCHIVA_BASE=$ARCHIVA_BASE" conf/wrapper.conf \
-	&& mv conf/* $ARCHIVA_BASE/conf \
-	&& rmdir conf logs temp \
-	&& ln -s $ARCHIVA_BASE/conf conf \
-	&& ln -s $ARCHIVA_BASE/data data \
-	&& ln -s $ARCHIVA_BASE/logs logs \
-	&& ln -s $ARCHIVA_BASE/temp temp \
-	\
-	&& chown -R archiva:archiva $ARCHIVA_BASE
+	&& mkdir -p /var/lib/archiva \
+	&& mv /usr/local/archiva/conf /var/lib/archiva \
+	&& ln -s /var/lib/archiva/conf /usr/local/archiva/conf \
+	&& rm -r /usr/local/archiva/logs /usr/local/archiva/temp \
+	&& for dir in \
+		data \
+		logs \
+		repositories \
+		temp \
+	; do \
+		mkdir -p "/var/lib/archiva/${dir}"; \
+		ln -s "/var/lib/archiva/${dir}" "/usr/local/archiva/${dir}"; \
+	done \
+	&& chown -R archiva:archiva /var/lib/archiva
 
-VOLUME /var/archiva
-USER archiva
-WORKDIR /usr/local/archiva
+ENV PATH /usr/local/archiva/bin:$PATH
+
+WORKDIR /var/lib/archiva
+
+VOLUME /var/lib/archiva/data
+VOLUME /var/lib/archiva/repositories
+
+COPY docker-entrypoint.sh /usr/local/bin
+ENTRYPOINT ["docker-entrypoint.sh"]
 
 EXPOSE 8080
-CMD [ "bin/archiva", "console" ]
+CMD ["archiva", "console"]
